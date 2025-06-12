@@ -1,10 +1,10 @@
 // =============== Imports ================
 use crate::api::anilist;
 use crate::config::{self, Config};
+use crate::discord_rpc::{self, is_discord_running};
 use crate::utils;
-use crate::discord_rpc;
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use reqwest::Client;
 use std::process;
@@ -189,7 +189,10 @@ fn build() -> Command {
         )
 }
 
-pub async fn handle_args(config: &mut Config, client: &Client) -> Result<(ArgMatches, discord_rpc_client::Client)> {
+pub async fn handle_args(
+    config: &mut Config,
+    client: &Client,
+) -> Result<(ArgMatches, discord_rpc_client::Client)> {
     let matches = build().get_matches();
 
     if matches.get_flag("edit") {
@@ -261,35 +264,29 @@ pub async fn handle_args(config: &mut Config, client: &Client) -> Result<(ArgMat
 
     if matches.get_flag("skip-op") {
         let default_skip = config.skip_opening;
-        config.score_on_completion = !default_skip;
+        config.skip_opening = !default_skip;
     }
     if matches.get_flag("skip-ed") {
         let default_skip = config.skip_credits;
-        config.score_on_completion = !default_skip;
+        config.skip_credits = !default_skip;
     }
     if matches.get_flag("skip-recap") {
         let default_skip = config.skip_recap;
-        config.score_on_completion = !default_skip;
+        config.skip_recap = !default_skip;
     }
     if matches.get_flag("skip-filler") {
         let default_skip = config.skip_filler;
-        config.score_on_completion = !default_skip;
+        config.skip_filler = !default_skip;
     }
 
-    let mut rpc_client;
+    let mut rpc_client = discord_rpc::init();
 
-    let drpc = discord_rpc::init();
-    match drpc {
-        Ok(client) => rpc_client = client,
-        Err(e) => {
-            log::error!("Failed to initialize Discord Rich Presence: {}", e);
-            println!("Couldn't initialize Discord Rich Presence");
-            config.discord_presence = false; // If the client failed to be initialized, don't bother with it
-            rpc_client = discord_rpc_client::Client::new(123) // dummy client
-        }
-    }
-    if config.discord_presence {
+    if config.discord_presence && is_discord_running() {
         rpc_client.start();
+    }
+    else {
+        config.discord_presence = false;
+        todo!("Needs fix")
     }
 
     // * No new changes in config after this
@@ -328,5 +325,5 @@ pub async fn handle_args(config: &mut Config, client: &Client) -> Result<(ArgMat
         process::exit(0);
     }
 
-    Ok((matches,rpc_client))
+    Ok((matches, rpc_client))
 }

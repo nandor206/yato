@@ -28,24 +28,34 @@ pub struct SkipInterval {
     pub end_time: f64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy)]
 pub struct Skip {
     pub start: f64,
     pub end: f64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct SkipData {
     pub op: Skip,
     pub ed: Skip,
     pub recap: Skip,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy)]
 pub struct Anime {
     pub episode: u32,
     pub mal_id: i32,
     pub skip_times: SkipData,
+}
+
+impl Default for SkipData {
+    fn default() -> Self {
+        Self {
+            op: Skip { start: 0.0, end: 0.0 },
+            ed: Skip { start: 0.0, end: 0.0 },
+            recap: Skip { start: 0.0, end: 0.0 },
+        }
+    }
 }
 
 // Function to get AniSkip data from the API
@@ -165,7 +175,6 @@ pub fn send_skip_times_to_mpv(anime: &Anime) -> Result<()> {
             "time": anime.skip_times.ed.end
         }),
     ];
-
 
     let mut stream = UnixStream::connect("/tmp/yato-mpvsocket")
         .with_context(|| "Failed to connect to MPV socket")?;
