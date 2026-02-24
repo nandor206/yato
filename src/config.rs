@@ -7,7 +7,7 @@ use log;
 use anyhow::{Context, Result};
 
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub player: String,
     pub player_args: String,

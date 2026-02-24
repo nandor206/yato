@@ -2178,6 +2178,7 @@ dependencies = [
  "dirs",
  "discord-rpc-client",
  "futures",
+ "futures-core",
  "fuzzy-matcher",
  "log",
  "m3u8-rs",

@@ -17,6 +17,7 @@
 
 // =============== Imports ================
 mod api;
+mod args;
 mod config;
 mod discord_rpc;
 mod local_save;
@@ -26,14 +27,16 @@ mod scraping;
 mod skip_override;
 mod theme;
 mod utils;
-mod args;
 
 use anyhow::{Context, Result};
 use dialoguer::{Input, MultiSelect, Select};
 use discord_rpc_client;
 use reqwest::{Client, ClientBuilder};
-use std::{collections::HashMap, io, process};
-use tokio;
+use std::{collections::HashMap, default, io, process};
+use tokio::{
+    self,
+    time::{Duration, sleep},
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -51,7 +54,6 @@ async fn main() -> Result<()> {
 
     let (matches, rpc_client) = args::handle_args(&mut config, &client).await?;
     {
-
         utils::check_network(&client).await?; // Checking if the network is available
 
         log::debug!("Updated configuration: {:#?}", config);
@@ -131,13 +133,13 @@ async fn main() -> Result<()> {
         return Ok(());
     } else if select_options == Some(0) {
         if config.discord_presence {
-            discord_rpc::selecting(&rpc_client,"Debating what to watch", "");
+            discord_rpc::selecting(&rpc_client, "Debating what to watch", "");
         }
-        continue_watching(&client, config, rpc_client).await?;
+        continue_watching(&client, config, rpc_client.clone()).await?;
     } else if select_options == Some(1) {
         // Edit (Episodes, Status, Score, Skipping)
         if config.discord_presence {
-            discord_rpc::selecting(&rpc_client,"Updating their List", "");
+            discord_rpc::selecting(&rpc_client, "Updating their List", "");
         }
         update(&client).await?;
     } else if select_options == Some(2) {
@@ -146,7 +148,7 @@ async fn main() -> Result<()> {
     } else if select_options == Some(3) {
         // Add new anime
         if config.discord_presence {
-            discord_rpc::selecting(&rpc_client,"Thinking what to watch next", "");
+            discord_rpc::selecting(&rpc_client, "Thinking what to watch next", "");
         }
         add_new_anime(&client).await?;
     } else {
@@ -251,7 +253,7 @@ async fn update(client: &Client) -> Result<()> {
     utils::clear();
     if select_options.is_none() {
         // User pressed ESC or Q
-        return Err(anyhow::anyhow!("No selection was made"))
+        return Err(anyhow::anyhow!("No selection was made"));
     } else if select_options == Some(0) {
         let anime_id = api::anilist::user_fetch::current(&client).await?.id;
         utils::clear();
@@ -321,7 +323,7 @@ async fn update(client: &Client) -> Result<()> {
         utils::clear();
 
         if over_ride.is_none() {
-            return Err(anyhow::anyhow!("No selection was made"))
+            return Err(anyhow::anyhow!("No selection was made"));
         } else if over_ride == Some(0) {
             let options = vec!["Update existing override", "Add new override"];
             let theme = theme::CustomTheme {};
@@ -332,7 +334,7 @@ async fn update(client: &Client) -> Result<()> {
                 .interact_opt()?;
             utils::clear();
             if select.is_none() {
-                return Err(anyhow::anyhow!("No selection was made"))
+                return Err(anyhow::anyhow!("No selection was made"));
             } else if select == Some(0) {
                 // Updating existing one
                 skip_override::interactive_update_override(&client).await?;
@@ -352,7 +354,7 @@ async fn update(client: &Client) -> Result<()> {
                     .interact_opt()?;
                 utils::clear();
                 if selection.is_none() {
-                    return Err(anyhow::anyhow!("No selection was made"))
+                    return Err(anyhow::anyhow!("No selection was made"));
                 } else if selection.is_some() {
                     let selected = selection.unwrap();
                     let mut intro = false;
@@ -446,106 +448,218 @@ async fn watch(
     syncing: bool,
 ) -> Result<()> {
     let mut cur_ep = anime_data.progress;
-    let mut link_cache: HashMap<u32, String> = HashMap::new();
-
     let mut anime_id = anime_data.id;
     let mut max_ep = anime_data.episodes;
     let mut anime_name = anime_data.title;
     let mut mal_id = api::anilist::fetch::id_converter(&client, anime_id).await?;
 
+    let mut cache: HashMap<u32, String> = default::Default::default();
+
+    // Start initial player
+    player::start_watching(&client, anime_id, mal_id, cur_ep, &config, &anime_name).await?;
+
+    // Main watching loop
     loop {
-        // * binge is set true when the user gets after the credits scene, before that it's false
-        let binge = player::play(
+        let binge = player::watching(
             &client,
             anime_id,
             mal_id,
-            cur_ep,
+            cur_ep + 1,
             max_ep,
             &config,
             &anime_name,
-            &mut link_cache,
             syncing,
             &mut rpc_client,
+            &mut cache,
         )
         .await?;
-        log::info!("Binge watching: {}\n", binge);
 
-        // * Scoring anime, then checking if the user wants to continue watching with the sequel
-        if cur_ep == max_ep && config.score_on_completion && binge {
-            utils::clear();
-            let theme = theme::CustomTheme {};
-            let new_score: f64 = loop {
-                let input: String = Input::with_theme(&theme)
-                    .with_prompt("Enter a score on a scale of 1 to 10")
-                    .interact_text()
-                    .expect("Failed to read input, or input was invalid");
+        log::info!("Binge watching: {}", binge);
 
-                match input.parse::<f64>() {
-                    Ok(score) if score >= 1.0 && score <= 10.0 => break score,
-                    _ => {
-                        println!("Score must be between 1 and 10.");
-                        continue;
-                    }
+        // If this was the last episode of the series
+        if binge {
+            cur_ep = cur_ep + 1;
+            if cur_ep == max_ep {
+                // Handle scoring if enabled
+                if config.score_on_completion {
+                    utils::clear();
+                    let theme = theme::CustomTheme {};
+                    let new_score: f64 = loop {
+                        let input: String = Input::with_theme(&theme)
+                            .with_prompt("Enter a score on a scale of 1 to 10")
+                            .interact_text()
+                            .expect("Failed to read input, or input was invalid");
+                        match input.parse::<f64>() {
+                            Ok(score) if score >= 1.0 && score <= 10.0 => break score,
+                            _ => {
+                                println!("Score must be between 1 and 10.");
+                                continue;
+                            }
+                        }
+                    };
+                    utils::clear();
+                    api::anilist::mutation::update_score(&client, anime_id, new_score).await?;
                 }
-            };
-            utils::clear();
-            api::anilist::mutation::update_score(&client, anime_id, new_score).await?;
-            println!("This was the last episode of the season.");
-            let sequel = sequel(&client, anime_id).await;
-            if let Ok(sequel_id) = sequel {
-                api::anilist::mutation::update_status(&client, sequel_id, 0).await?;
+
+                println!("This was the last episode of the season.");
+
+                // Check for sequel
+                let sequel = sequel(&client, anime_id).await;
+                if let Ok(sequel_id) = sequel {
+                    // Update status for the sequel
+                    if config.score_on_completion {
+                        api::anilist::mutation::update_status(&client, sequel_id, 0).await?;
+                    } else {
+                        api::anilist::mutation::update_progress(&client, sequel_id, 0).await?;
+                    }
+
+                    // Update anime information for the sequel
+                    anime_id = sequel_id;
+                    cur_ep = 0;
+                    let data = api::anilist::fetch::data_by_id(&client, anime_id).await?;
+                    max_ep = data.episodes;
+                    anime_name = data.title;
+
+                    println!("Starting the sequel...");
+                    mal_id = api::anilist::fetch::id_converter(&client, sequel_id).await?;
+
+                    let client_clone = client.clone();
+                    let config_lang = config.language.clone();
+                    let config_quality = config.quality.clone();
+                    let config_sub_or_dub = config.sub_or_dub.clone();
+                    let name_clone = anime_name.clone();
+                    let config_clone = config.clone();
+                    let mut next_ep = cur_ep;
+                    tokio::task::spawn(async move {
+                        if skip_override::search(anime_id).filler {
+                            if !config_clone.skip_filler {
+                                next_ep = player::filler(&client_clone, mal_id, next_ep)
+                                    .await
+                                    .unwrap();
+                            }
+                        } else if config_clone.skip_filler {
+                            next_ep = player::filler(&client_clone, mal_id, next_ep)
+                                .await
+                                .unwrap();
+                        }
+
+                        let mut next_url: Result<String> = Err(anyhow::anyhow!(""));
+                        while next_url.is_err() {
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                            next_url = player::get_url(
+                                &client_clone,
+                                &config_lang,
+                                mal_id,
+                                anime_id,
+                                next_ep,
+                                &config_quality,
+                                &config_sub_or_dub,
+                                &name_clone,
+                            )
+                            .await
+                            .with_context(|| {
+                                format!("Failed to fetch URL for episode {}", next_ep)
+                            });
+                            if next_url.is_err() {
+                                eprintln!("Failed to get episode link, retrying...");
+                                log::warn!("Failed to get episode link for id: {}", anime_id);
+                            }
+                        }
+
+                        mpvipc::send_command(&["loadfile", &next_url.unwrap()])
+                            .await
+                            .unwrap();
+                    });
+
+                    // Continue to the next iteration without exiting
+                    continue;
+                } else {
+                    // No sequel, exit
+                    break;
+                }
             }
-        } else if cur_ep == max_ep && binge {
-            // * Same as above, but without scoring
-            println!("This was the last episode of the season.");
-            let sequel = sequel(&client, anime_id).await;
-            if let Ok(sequel_id) = sequel {
-                api::anilist::mutation::update_progress(&client, sequel_id, 0).await?; // Setting the progress to 0 just incase
-                anime_id = sequel_id;
-                cur_ep = 0;
-                let data = api::anilist::fetch::data_by_id(&client, anime_id).await;
-                match data {
-                    Ok(d) => {
-                        max_ep = d.episodes;
-                        anime_name = d.title;
-                    }
-                    Err(e) => return Err(e),
+
+            let mut ep_to_get = cur_ep+1;
+            let override_setting = skip_override::search(anime_id);
+            if override_setting.filler {
+                if !config.skip_filler {
+                    ep_to_get = player::filler(&client, mal_id, ep_to_get).await?;
                 }
-                println!("Starting the sequel...");
-                link_cache.clear();
-                mal_id = api::anilist::fetch::id_converter(&client, sequel_id)
-                    .await
-                    .unwrap();
-                link_cache.insert(
-                    cur_ep + 1,
-                    player::get_url(
+            } else if config.skip_filler {
+                ep_to_get = player::filler(&client, mal_id, ep_to_get).await?;
+            }
+
+            let next_url = cache.get(&ep_to_get);
+
+            match next_url {
+                Some(url) => {
+                    mpvipc::send_command(&["loadfile", &url]).await.unwrap();
+                    log::debug!("Episode loaded");
+                }
+                None => {
+                    println!("No link prefetched, fetching now.");
+                    let override_setting = skip_override::search(anime_id);
+
+                    if override_setting.filler {
+                        if !config.skip_filler {
+                            ep_to_get = player::filler(&client, mal_id, cur_ep).await?;
+                        }
+                    } else if config.skip_filler {
+                        cur_ep = player::filler(&client, mal_id, cur_ep).await?;
+                    }
+
+                    let mut url = player::get_url(
                         &client,
                         &config.language,
                         mal_id,
                         anime_id,
-                        cur_ep + 1,
+                        ep_to_get,
                         &config.quality,
                         &config.sub_or_dub,
                         &anime_name,
                     )
-                    .await?,
-                );
-                continue;
-            } else {
-                break;
-            }
-        }
+                    .await;
 
-        if !binge {
-            if config.discord_presence {
-                rpc_client.clear_activity().expect("Failed to clear activity");
+                    while url.is_err() {
+                        sleep(Duration::from_secs(3)).await;
+                        url = player::get_url(
+                            &client,
+                            &config.language,
+                            mal_id,
+                            anime_id,
+                            cur_ep+1,
+                            &config.quality,
+                            &config.sub_or_dub,
+                            &anime_name,
+                        )
+                        .await;
+                    }
+
+                    match mpvipc::send_command(&["loadfile", &url?]).await {
+                        Ok(_) => {},
+                        Err(_) => {
+                            utils::clear();
+                            println!("Failed to load next episode.");
+                            log::warn!("Error loading next episode");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            break;
+                        }
+                    };
+                    log::debug!("Episode loaded");
+                }
             }
-            break;
         } else {
-            cur_ep += 1;
+            // Not binging, exit
+            log::info!("Not binging");
+            break;
         }
     }
+
+    utils::clear();
     println!("See you later!");
+    if config.discord_presence {
+        rpc_client.clear_activity().unwrap();
+    }
 
     Ok(())
 }

@@ -16,7 +16,7 @@ pub struct WatchProgress {
     pub scraper_ids: HashMap<String, String>, // language -> scraper_id
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ProgressDatabase {
     pub entries: Vec<WatchProgress>,
 }
@@ -62,6 +62,7 @@ impl ProgressDatabase {
     pub fn update_or_add(&mut self, anilist_id: i32, episode: u32, position: f64, language: &str, scraper_id: &str) {
         if let Some(entry) = self.entries.iter_mut().find(|e| e.anilist_id == anilist_id) {
             entry.position = position;
+            entry.episode = episode;
             entry.scraper_ids.insert(language.to_string(), scraper_id.to_string());
         } else {
             let mut scraper_ids = HashMap::new();

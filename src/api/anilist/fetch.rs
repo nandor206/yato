@@ -287,6 +287,7 @@ pub async fn id_converter(client: &Client, id: i32) -> Result<i32> {
 }
 
 // gets anime name and episode count by id
+#[derive(Clone)]
 pub struct AnimeData {
     pub title: String,
     pub episodes: u32,
