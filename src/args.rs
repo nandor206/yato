@@ -286,7 +286,7 @@ pub async fn handle_args(
     }
     else {
         config.discord_presence = false;
-        todo!("Needs fix")
+        //todo!("Needs fix")
     }
 
     // * No new changes in config after this

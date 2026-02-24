@@ -145,48 +145,27 @@ pub async fn get_and_parse_ani_skip_data(
 
 // Send skip times to MPV
 pub fn send_skip_times_to_mpv(anime: &Anime) -> Result<()> {
-    let chapter_list = vec![
-        json!({
-            "title": "Title card",
-            "time": 0.0
-        }),
-        json!({
-            "title": "Recap",
-            "time": anime.skip_times.recap.start
-        }),
-        json!({
-            "title": "Pre-Opening",
-            "time": anime.skip_times.recap.end
-        }),
-        json!({
-            "title": "Opening",
-            "time": anime.skip_times.op.start
-        }),
-        json!({
-            "title": "Main",
-            "time": anime.skip_times.op.end
-        }),
-        json!({
-            "title": "Credits",
-            "time": anime.skip_times.ed.start
-        }),
-        json!({
-            "title": "Post-Credits",
-            "time": anime.skip_times.ed.end
-        }),
+    let chapters = vec![
+        ("Title card", 0.0),
+        ("Recap", anime.skip_times.recap.start),
+        ("Pre-Opening", anime.skip_times.recap.end),
+        ("Opening", anime.skip_times.op.start),
+        ("Main", anime.skip_times.op.end),
+        ("Credits", anime.skip_times.ed.start),
+        ("Post-Credits", anime.skip_times.ed.end),
     ];
-
+    
     let mut stream = UnixStream::connect("/tmp/yato-mpvsocket")
         .with_context(|| "Failed to connect to MPV socket")?;
 
-    let cmd = json!({
-        "command": ["set_property", "chapter-list", chapter_list]
+    for (title, time) in chapters {
+        let cmd = json!({
+        "command": ["add", "chapter", time, title]
     });
 
-    let json = serde_json::to_string(&cmd)
-        .with_context(|| "Failed to serialize chapter list command to JSON")?;
-    writeln!(stream, "{}", json)
-        .with_context(|| "Failed to write chapter list command to MPV socket")?;
+        let json = serde_json::to_string(&cmd)?;
+        writeln!(stream, "{}", json)?;
+    }
 
     log::info!("Sent skip times to MPV");
 

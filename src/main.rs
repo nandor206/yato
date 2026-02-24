@@ -635,7 +635,16 @@ async fn watch(
                         .await;
                     }
 
-                    mpvipc::send_command(&["loadfile", &url.unwrap()]).await.unwrap();
+                    match mpvipc::send_command(&["loadfile", &url?]).await {
+                        Ok(_) => {},
+                        Err(_) => {
+                            utils::clear();
+                            println!("Failed to load next episode.");
+                            log::warn!("Error loading next episode");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            break;
+                        }
+                    };
                     log::debug!("Episode loaded");
                 }
             }
