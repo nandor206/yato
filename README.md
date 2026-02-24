@@ -164,3 +164,4 @@ discord_presence: false
 
 > Made with 🦀 and ☕ by a fan of Noragami.  
 > Want to contribute? Pull requests and feedbacks are welcome!
+## This project is not maintained currently
